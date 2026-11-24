@@ -115,10 +115,17 @@
         }
       }
       const detail = this.attempts.join(' · ');
-      throw new Error(
-        `Deriv injoignable (app_id ${this.appId}). ${detail}. `
-        + 'Vérifier la console du navigateur, onglet Réseau, pour le code HTTP du refus.',
-      );
+      // Ouverte en `file://`, la page envoie `Origin: null` dans la poignée de
+      // main WebSocket, ce que Deriv refuse couramment. C'est la cause la plus
+      // fréquente quand charts.deriv.com fonctionne mais que l'app échoue : il
+      // suffit alors de servir la page en http.
+      const fileOrigin = typeof location !== 'undefined' && location.protocol === 'file:';
+      const piste = fileOrigin
+        ? ' La page est ouverte en file:// : le WebSocket part avec une origine nulle, '
+          + 'que Deriv refuse. Servir la page en http — `node server/server.js` '
+          + 'ou `python3 -m http.server 8000` — puis réessayer.'
+        : ' Vérifier la console du navigateur, onglet Réseau, pour le code HTTP du refus.';
+      throw new Error(`Deriv injoignable (app_id ${this.appId}). ${detail}.${piste}`);
     }
 
     _connect(url) {
