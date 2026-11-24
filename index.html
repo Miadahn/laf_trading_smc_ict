@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMC ICT Analyzer</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">SMC · ICT <span>Analyzer</span></div>
+
+    <div class="controls">
+      <label class="field">
+        <span>Source</span>
+        <select id="source">
+          <option value="deriv">Deriv (synthétiques, Forex, indices…)</option>
+          <option value="binance">Binance (crypto, en direct)</option>
+          <option value="csv">Fichier CSV</option>
+          <option value="demo">Données de démo</option>
+        </select>
+      </label>
+
+      <label class="field" id="symbolField">
+        <span>Actif</span>
+        <input id="symbol" list="symbols-deriv" value="R_75" spellcheck="false" autocomplete="off">
+        <datalist id="symbols-deriv"></datalist>
+        <datalist id="symbols-binance">
+          <option value="BTCUSDT"><option value="ETHUSDT"><option value="SOLUSDT">
+          <option value="BNBUSDT"><option value="XRPUSDT"><option value="ADAUSDT">
+          <option value="DOGEUSDT"><option value="PAXGUSDT"><option value="EURUSDT">
+        </datalist>
+      </label>
+
+      <label class="field" id="appIdField" title="Identifiant d'application Deriv (1089 = application de test publique). Crée le tien gratuitement sur api.deriv.com.">
+        <span>Deriv App ID</span>
+        <input id="appId" value="1089" inputmode="numeric" spellcheck="false" autocomplete="off">
+      </label>
+
+      <label class="field" id="csvField" hidden>
+        <span>Fichier</span>
+        <input id="csvFile" type="file" accept=".csv,.txt">
+      </label>
+
+      <label class="field">
+        <span>Unité de temps</span>
+        <select id="tf">
+          <option value="1m">1m</option>
+          <option value="5m">5m</option>
+          <option value="15m" selected>15m</option>
+          <option value="30m">30m</option>
+          <option value="1h">1h</option>
+          <option value="4h">4h</option>
+          <option value="1d">1D</option>
+          <option value="1w">1W</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Longueur swing</span>
+        <input id="swingLen" type="number" min="2" max="20" value="5">
+      </label>
+
+      <button id="refresh" class="btn primary">Analyser</button>
+      <label class="check"><input type="checkbox" id="auto"> <span id="autoLabel">Temps réel</span></label>
+    </div>
+  </header>
+
+  <nav class="layers" aria-label="Calques affichés">
+    <label class="chip"><input type="checkbox" data-layer="structure" checked> Structure (BOS/CHoCH)</label>
+    <label class="chip"><input type="checkbox" data-layer="swings" checked> Swings</label>
+    <label class="chip"><input type="checkbox" data-layer="ob" checked> Order Blocks</label>
+    <label class="chip"><input type="checkbox" data-layer="breaker" checked> Breakers</label>
+    <label class="chip"><input type="checkbox" data-layer="fvg" checked> FVG</label>
+    <label class="chip"><input type="checkbox" data-layer="liquidity" checked> Liquidité</label>
+    <label class="chip"><input type="checkbox" data-layer="pd" checked> Premium/Discount</label>
+    <label class="chip"><input type="checkbox" data-layer="killzones" checked> Killzones</label>
+    <label class="chip"><input type="checkbox" data-layer="levels" checked> PDH/PDL</label>
+    <label class="chip"><input type="checkbox" data-layer="history"> Zones passées</label>
+  </nav>
+
+  <main class="layout">
+    <section class="chart-wrap">
+      <div id="chart"></div>
+      <canvas id="overlay"></canvas>
+      <div class="chart-status" id="status">Chargement…</div>
+    </section>
+
+    <aside class="panel">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="analysis" role="tab">Analyse</button>
+        <button class="tab" data-tab="guide" role="tab">Guide SMC / ICT</button>
+      </div>
+
+      <div id="tab-analysis" class="tab-body">
+        <div id="analysis"></div>
+      </div>
+
+      <div id="tab-guide" class="tab-body" hidden>
+        <details open>
+          <summary>Structure : BOS et CHoCH</summary>
+          <p><b>BOS</b> (Break of Structure) : la clôture dépasse le dernier sommet (tendance haussière) ou le dernier creux (tendance baissière). La tendance <i>continue</i>.</p>
+          <p><b>CHoCH</b> (Change of Character) : première cassure dans le sens <i>opposé</i> à la tendance. Premier signe de retournement.</p>
+          <p>Les étiquettes <b>HH/HL</b> (plus hauts/plus bas croissants) décrivent une tendance haussière, <b>LH/LL</b> une tendance baissière.</p>
+        </details>
+        <details>
+          <summary>Order Block (OB) et Breaker</summary>
+          <p>Dernière bougie de couleur opposée avant le mouvement impulsif qui a cassé la structure. C'est là que les « gros » ordres ont été placés ; le prix y revient souvent.</p>
+          <p>Un OB <b>avec FVG</b> (déplacement fort) est plus fiable. Un OB cassé en clôture devient un <b>Breaker Block</b> de sens inverse.</p>
+        </details>
+        <details>
+          <summary>Fair Value Gap (FVG)</summary>
+          <p>Déséquilibre sur 3 bougies : le plus bas de la bougie 3 est au-dessus du plus haut de la bougie 1 (FVG haussier), ou l'inverse. Le prix tend à revenir « combler » ce vide.</p>
+        </details>
+        <details>
+          <summary>Liquidité (BSL / SSL, EQH / EQL)</summary>
+          <p>Les stops s'accumulent au-dessus des sommets (<b>BSL</b>, buy-side) et sous les creux (<b>SSL</b>, sell-side). Des sommets ou creux égaux (<b>EQH/EQL</b>) sont des aimants à liquidité.</p>
+          <p>Un <b>sweep</b> ($) = mèche qui prend la liquidité puis clôture de l'autre côté : signe de manipulation avant le vrai mouvement.</p>
+        </details>
+        <details>
+          <summary>Premium / Discount et OTE</summary>
+          <p>Le range actuel est coupé en deux à l'équilibre (50 %). On cherche à <b>acheter en Discount</b> (sous 50 %) et <b>vendre en Premium</b> (au-dessus).</p>
+          <p><b>OTE</b> (Optimal Trade Entry) : retracement de 62 % à 79 % de la jambe, zone d'entrée privilégiée par ICT.</p>
+        </details>
+        <details>
+          <summary>Killzones (heure de New York)</summary>
+          <ul>
+            <li><b>Asie</b> : 20h00 – 00h00</li>
+            <li><b>Londres</b> : 02h00 – 05h00</li>
+            <li><b>New York AM</b> : 07h00 – 10h00</li>
+            <li><b>London Close</b> : 10h00 – 12h00</li>
+          </ul>
+          <p>Le graphique est affiché en heure de New York, la référence d'ICT.</p>
+          <p>Les <b>indices synthétiques Deriv</b> (Volatility, Boom/Crash, Step, Jump) tournent 24h/24 avec un générateur aléatoire : ils n'ont pas de sessions, donc les killzones ne s'y appliquent pas. Elles restent valables pour le Forex, l'or et les indices.</p>
+        </details>
+        <details>
+          <summary>Deriv : symboles</summary>
+          <ul>
+            <li><b>R_75</b>, <b>R_100</b>… : Volatility Indices ; <b>1HZ100V</b> : version 1 tick/seconde</li>
+            <li><b>BOOM1000</b> / <b>CRASH1000</b> : pics brusques en moyenne toutes les 1000 ticks</li>
+            <li><b>stpRNG</b> : Step Index ; <b>JD25</b> : Jump Index</li>
+            <li><b>frxEURUSD</b>, <b>frxXAUUSD</b> (or) : Forex et métaux</li>
+            <li><b>OTC_NDX</b> (Nasdaq), <b>OTC_SPC</b> (S&amp;P 500) : indices</li>
+          </ul>
+          <p>Tu peux saisir n'importe quel symbole Deriv ; la liste complète est chargée automatiquement depuis Deriv.</p>
+        </details>
+        <details>
+          <summary>Modèle de trade type</summary>
+          <ol>
+            <li>Biais sur l'unité supérieure (HTF).</li>
+            <li>Attendre une prise de liquidité (sweep).</li>
+            <li>CHoCH / BOS sur l'unité inférieure avec déplacement (FVG).</li>
+            <li>Entrée au retour dans l'OB / FVG, idéalement en Discount/OTE et en killzone.</li>
+            <li>Stop sous la zone, objectif sur la liquidité opposée.</li>
+          </ol>
+        </details>
+        <p class="disclaimer">Outil pédagogique d'aide à l'analyse. Ce n'est pas un conseil en investissement : le trading comporte un risque de perte en capital.</p>
+      </div>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="js/smc.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
