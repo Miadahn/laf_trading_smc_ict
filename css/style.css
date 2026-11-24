@@ -169,6 +169,11 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
   background: linear-gradient(90deg, rgba(38,166,154,.45), rgba(38,166,154,.15) 50%, rgba(239,83,80,.15) 50%, rgba(239,83,80,.45)); }
 .pd-bar > b { position: absolute; top: -4px; width: 3px; height: 18px; background: var(--text); border-radius: 2px; transform: translateX(-1px); }
 
+/* Calculateur -------------------------------------------------------------- */
+.calc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 10px; margin-bottom: 10px; }
+.calc-grid .field input { width: 100%; }
+#tab-calc .btn { width: 100%; }
+
 .checklist { list-style: none; margin: 8px 0 0; padding: 0; }
 .checklist li { display: flex; gap: 8px; padding: 3px 0; font-size: 13px; }
 .checklist .ico { width: 16px; text-align: center; flex: none; }

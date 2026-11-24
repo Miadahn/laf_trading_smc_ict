@@ -9,6 +9,9 @@
     bull: '#26a69a', bear: '#ef5350', text: '#d6dde6', muted: '#8b96a5',
     bullZone: 'rgba(38,166,154,', bearZone: 'rgba(239,83,80,',
     fvgBull: 'rgba(79,140,255,', fvgBear: 'rgba(255,152,0,',
+    gap: 'rgba(179,157,219,',
+    ifvg: 'rgba(0,188,212,',
+    unicorn: 'rgba(174,213,129,',
     liq: '#ffd54f', eq: '#9aa4b2', ote: 'rgba(255,183,77,',
   };
 
@@ -24,6 +27,9 @@
       localStorage.setItem(PREF_KEY, JSON.stringify({
         source: $('source').value, symbols: state.symbols, tf: $('tf').value, appId: $('appId').value,
         swingLen: $('swingLen').value, layers: [...state.layers],
+        known: [...document.querySelectorAll('[data-layer]')].map((b) => b.dataset.layer),
+        capital: $('capital').value, riskPct: $('riskPct').value,
+        unitsPerLot: $('cUnitsPerLot').value,
       }));
     } catch (e) { /* stockage indisponible : on ignore */ }
   }
@@ -78,6 +84,17 @@
   }
   let priceDigits = 2;
   const fmt = (p) => (p === null || p === undefined || !Number.isFinite(p) ? '—' : p.toFixed(priceDigits));
+  /** Somme en USD : 2 décimales suffisent. */
+  const money = (v) => (Number.isFinite(v) ? v.toFixed(2) + ' USD' : '—');
+
+  /** Volume : assez de décimales pour un micro-lot, sans bruit inutile. */
+  const vol = (v) => {
+    if (!Number.isFinite(v)) return '—';
+    if (v >= 100) return v.toFixed(2);
+    if (v >= 1) return v.toFixed(3);
+    return v.toPrecision(3);
+  };
+
   const dirWord = (d) => (d === 1 ? 'Haussier' : d === -1 ? 'Baissier' : 'Neutre');
   const dirClass = (d) => (d === 1 ? 'bull' : d === -1 ? 'bear' : 'neutral');
   const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
@@ -253,6 +270,47 @@
         });
       }
     }
+    if (state.layers.has('judas') && r.judas) {
+      for (const j of r.judas) {
+        if (T[j.sweepIndex] !== undefined) {
+          markers.push({
+            time: T[j.sweepIndex],
+            position: j.dir === 1 ? 'belowBar' : 'aboveBar',
+            color: '#ffb74d',
+            shape: j.dir === 1 ? 'arrowUp' : 'arrowDown',
+            text: 'Judas ' + j.sessionName,
+          });
+        }
+      }
+    }
+
+    if (state.layers.has('cisd') && r.cisd) {
+      for (const x of r.cisd.slice(-3)) {
+        if (T[x.index] === undefined) continue;
+        markers.push({
+          time: T[x.index],
+          position: x.dir === 1 ? 'belowBar' : 'aboveBar',
+          color: '#26c6da',
+          shape: x.dir === 1 ? 'arrowUp' : 'arrowDown',
+          text: 'CISD',
+        });
+      }
+    }
+
+    if (state.layers.has('turtle') && r.turtle) {
+      for (const t of r.turtle.slice(-6)) {
+        if (T[t.index] === undefined) continue;
+        markers.push({
+          time: T[t.index],
+          position: t.side === 'high' ? 'aboveBar' : 'belowBar',
+          color: '#ab47bc',
+          shape: 'circle',
+          size: 0.6,
+          text: '$',
+        });
+      }
+    }
+
     markers.sort((a, b) => a.time - b.time);
     series.setMarkers(markers);
 
@@ -264,6 +322,15 @@
       if (r.levels.pdh) line(r.levels.pdh.price, '#b39ddb', 'PDH', LWC.LineStyle.Dotted);
       if (r.levels.pdl) line(r.levels.pdl.price, '#b39ddb', 'PDL', LWC.LineStyle.Dotted);
       if (r.levels.midnightOpen) line(r.levels.midnightOpen.price, '#90a4ae', 'Midnight Open', LWC.LineStyle.SparseDotted);
+    }
+    // Le True Open du jour vaut le Midnight Open : on ne redessine que celui de
+    // la semaine, qui n'est affiché nulle part ailleurs.
+    if (state.layers.has('quarters') && intraday && r.trueOpens && r.trueOpens.wto) {
+      line(r.trueOpens.wto.price, '#b39ddb', 'WTO (lundi 18h)', LWC.LineStyle.LargeDashed);
+    }
+    if (state.layers.has('cisd') && r.cisd && r.cisd.length) {
+      const x = r.cisd[r.cisd.length - 1];
+      line(x.level, '#26c6da', 'CISD ' + (x.dir === 1 ? '↑' : '↓'), LWC.LineStyle.Dotted);
     }
     const s = r.setup;
     if (s && s.zone) {
@@ -277,7 +344,8 @@
   // Dessin des zones sur le canvas superposé
   // ---------------------------------------------------------------------------
   function zoneName(z) {
-    if (z.kind === 'fvg') return (z.dir === 1 ? 'FVG haussier' : 'FVG baissier');
+    if (z.kind === 'fvg') return (z.dir === 1 ? 'FVG haussier (BISI)' : 'FVG baissier (SIBI)');
+    if (z.kind === 'ifvg') return (z.dir === 1 ? 'IFVG haussier' : 'IFVG baissier');
     if (z.kind === 'breaker') return (z.dir === 1 ? 'Breaker haussier' : 'Breaker baissier');
     return (z.dir === 1 ? 'OB haussier' : 'OB baissier') + (z.hasFvg ? ' + FVG' : '');
   }
@@ -347,6 +415,31 @@
       }
     }
 
+    // Quarterly Theory : séparateurs des quarts de 6 h et des blocs de 90 min
+    if (state.layers.has('quarters') && r.useKillzones && Data.TF_SECONDS[state.tf] <= 3600) {
+      const vr = ts.getVisibleLogicalRange();
+      if (vr) {
+        const from = Math.max(1, Math.floor(vr.from));
+        const to = Math.min(n - 1, Math.ceil(vr.to));
+        for (let i = from; i <= to; i++) {
+          const q = SMC.quarterOf(state.candles[i].time);
+          const prev = SMC.quarterOf(state.candles[i - 1].time);
+          if (!q || !prev) continue;
+          const newQuarter = q.id !== prev.id;
+          const newBlock = newQuarter || q.subStart !== prev.subStart;
+          if (!newBlock) continue;
+          const xq = x(i) - bw / 2;
+          if (xq === null) continue;
+          g.strokeStyle = newQuarter ? 'rgba(179,157,219,.45)' : 'rgba(179,157,219,.14)';
+          g.setLineDash(newQuarter ? [] : [2, 4]);
+          g.beginPath(); g.moveTo(xq, 0); g.lineTo(xq, h); g.stroke();
+          g.setLineDash([]);
+          if (newQuarter) label(`${q.name} · ${q.phase}`, xq + 4, 12, 'rgba(179,157,219,.75)');
+          else label(`${q.sub}`, xq + 3, 24, 'rgba(179,157,219,.4)');
+        }
+      }
+    }
+
     // Premium / Discount + OTE
     if (state.layers.has('pd') && r.pd) {
       const pd = r.pd;
@@ -396,6 +489,57 @@
         drawZone(f, f.filledAt, f.dir === 1 ? COLORS.fvgBull : COLORS.fvgBear, f.status === 'filled' ? 0.06 : 0.16, 'FVG');
       }
     }
+    // Écarts d'ouverture : la zone, plus son milieu (CE) en pointillé — c'est le
+    // niveau que la méthode surveille, pas les bords.
+    if (state.layers.has('gaps') && r.gaps) {
+      for (const gp of [...r.gaps.nwog, ...r.gaps.ndog]) {
+        if (!history && gp.status === 'filled') continue;
+        const alpha = gp.status === 'filled' ? 0.05 : gp.status === 'ce' ? 0.10 : 0.18;
+        drawZone(gp, null, COLORS.gap, alpha, gp.kind.toUpperCase());
+        const ym = y(gp.mid);
+        const xm = x(gp.index);
+        if (ym !== null && xm !== null) {
+          g.strokeStyle = COLORS.gap + '.55)';
+          g.setLineDash([3, 3]);
+          g.beginPath(); g.moveTo(Math.max(xm, 0), ym); g.lineTo(w, ym); g.stroke();
+          g.setLineDash([]);
+        }
+      }
+    }
+
+    // Judas Swing : la range de référence, du début de la session de référence
+    // jusqu'au balayage qui l'a prise.
+    if (state.layers.has('judas') && r.judas) {
+      for (const j of r.judas) {
+        const zone = { index: j.rangeFrom, top: j.rangeHigh, bottom: j.rangeLow };
+        drawZone(zone, j.sweepIndex, 'rgba(255,183,77,', 0.08, `Range ${j.sessionName}`);
+      }
+    }
+
+    // Unicorn : on dessine le chevauchement, la zone réellement tradable.
+    if (state.layers.has('unicorn') && r.unicorns) {
+      for (const u of r.unicorns) {
+        drawZone(u, null, COLORS.unicorn, 0.22, 'Unicorn');
+        const ye = y(u.entry);
+        const xe = x(u.index);
+        if (ye !== null && xe !== null) {
+          g.strokeStyle = COLORS.unicorn + '.8)';
+          g.setLineDash([4, 2]);
+          g.beginPath(); g.moveTo(Math.max(xe, 0), ye); g.lineTo(w, ye); g.stroke();
+          g.setLineDash([]);
+        }
+      }
+    }
+
+    // IFVG : un FVG traversé en clôture, désormais zone de sens inverse.
+    if (state.layers.has('ifvg') && r.ifvgs) {
+      for (const z of r.ifvgs) {
+        if (!history && z.status === 'invalidated') continue;
+        const alpha = z.status === 'invalidated' ? 0.05 : z.status === 'mitigated' ? 0.12 : 0.20;
+        drawZone(z, z.invalidatedAt, COLORS.ifvg, alpha, 'IFVG');
+      }
+    }
+
     for (const z of r.blocks) {
       const layer = z.kind === 'breaker' ? 'breaker' : 'ob';
       if (!state.layers.has(layer)) continue;
@@ -465,6 +609,166 @@
   })();
 
   // ---------------------------------------------------------------------------
+  // Taille de position (exécution manuelle chez le broker)
+  // ---------------------------------------------------------------------------
+  /** Lignes « Taille de position » de la carte Setup. */
+  function sizeRows(s) {
+    const ps = SMC.positionSize(s.entry, s.sl, parseFloat($('capital').value), parseFloat($('riskPct').value));
+    if (!ps) return '<div class="row"><span class="k">Taille de position</span><span class="muted">renseigner Capital et Risque %</span></div>';
+    const u = ps.units;
+    const units = u >= 100 ? u.toFixed(2) : u >= 1 ? u.toFixed(4) : u.toPrecision(3);
+    return `
+          <div class="row"><span class="k">Risque par unité</span><span>${fmt(ps.perUnit)}</span></div>
+          <div class="row"><span class="k">Montant risqué</span><span class="bear">${money(ps.riskMoney)}</span></div>
+          <div class="row"><span class="k">Taille de position</span><span><b>${units}</b> unités</span></div>
+          ${quoteWarning()}`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Alertes du serveur (si l'app est servie par server/server.js)
+  // ---------------------------------------------------------------------------
+  // Ouverte en file://, l'app n'a pas de serveur : la carte reste simplement
+  // absente, aucune erreur affichée.
+  const SERVER_ALERTS_MS = 30000;
+
+  function alertAge(ms) {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return `il y a ${s} s`;
+    if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
+    if (s < 86400) return `il y a ${Math.round(s / 3600)} h`;
+    return `il y a ${Math.round(s / 86400)} j`;
+  }
+
+  async function refreshServerAlerts() {
+    const el = $('serverAlerts');
+    let data;
+    try {
+      const res = await fetch('api/alerts?limit=25', { cache: 'no-store' });
+      if (!res.ok) throw new Error(String(res.status));
+      data = await res.json();
+    } catch (e) {
+      el.innerHTML = '';                         // pas de serveur : rien à montrer
+      return;
+    }
+    const rows = Array.isArray(data.alerts) ? data.alerts : [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="card"><h3>Alertes du serveur</h3><p class="muted">Aucune alerte enregistrée pour l’instant.</p></div>';
+      return;
+    }
+    el.innerHTML = `
+      <div class="card">
+        <h3>Alertes du serveur</h3>
+        <ul class="zone-list">
+          ${rows.map((a) => `
+            <li>
+              <span><span class="tag">${esc(a.symbol)} ${esc(a.tf)}</span>
+                <span class="${a.dir === 1 ? 'bull' : a.dir === -1 ? 'bear' : ''}">${esc(a.text)}</span></span>
+              <span class="sub">${esc(alertAge(a.detected_at))}${a.notified ? '' : ' · non envoyée'}</span>
+            </li>`).join('')}
+        </ul>
+      </div>`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Onglet Calculateur
+  // ---------------------------------------------------------------------------
+  const CALC_FIELDS = ['cEntry', 'cSl', 'cTp', 'cCapital', 'cRiskPct', 'cUnitsPerLot', 'cLots'];
+
+  /**
+   * Avertissement si l'actif courant n'est pas coté en USD : les montants
+   * calculés sont alors dans la devise de cotation, pas en USD.
+   */
+  function quoteWarning() {
+    const q = Data.quoteCurrency(state.label, $('source').value);
+    if (!q || q === 'USD') return '';
+    return `<p class="sub bear">${esc(state.label)} est coté en ${esc(q)}, pas en USD : les montants ci-dessus sont en ${esc(q)}. Convertir en USD au taux ${esc(q)}/USD.</p>`;
+  }
+
+  function renderCalc() {
+    const el = $('calcOut');
+    const m = SMC.tradeMath({
+      entry: $('cEntry').value, sl: $('cSl').value, tp: $('cTp').value,
+      capital: $('cCapital').value, riskPct: $('cRiskPct').value,
+      unitsPerLot: $('cUnitsPerLot').value, lots: $('cLots').value,
+    });
+    if (!m) {
+      el.innerHTML = '<div class="card"><h3>Résultat</h3><p class="muted">Renseigner une entrée et un stop loss différents l’un de l’autre.</p></div>';
+      return;
+    }
+
+    const parts = [];
+    const sens = m.dir === 1 ? '<span class="bias bull">Achat</span>' : '<span class="bias bear">Vente</span>';
+    parts.push(`
+      <div class="card">
+        <h3>Trade</h3>
+        <div class="row"><span class="k">Sens</span><span>${sens}</span></div>
+        <div class="row"><span class="k">Distance au stop</span><span class="bear">${fmt(m.stopDist)}</span></div>
+        <div class="row"><span class="k">Distance à l'objectif</span><span class="bull">${m.tpValid ? fmt(m.targetDist) : '—'}</span></div>
+        <div class="row"><span class="k">Risque / rendement</span><span>${m.rr ? '1 : ' + m.rr.toFixed(2) : '—'}</span></div>
+        ${m.tpValid === false ? `<p class="sub bear">Objectif du mauvais côté de l'entrée pour un ${m.dir === 1 ? 'achat' : 'vente'} : il devrait être ${m.dir === 1 ? 'au-dessus' : 'en dessous'} de l'entrée.</p>` : ''}
+      </div>`);
+
+    const r = m.fromRisk;
+    parts.push(`
+      <div class="card">
+        <h3>Volume conseillé</h3>
+        ${r ? `
+        <div class="row"><span class="k">Montant risqué</span><span class="bear">${money(r.riskMoney)}</span></div>
+        <div class="row"><span class="k">Gain si objectif touché</span><span class="bull">${money(r.rewardMoney)}</span></div>
+        <div class="row"><span class="k">Taille</span><span>${vol(r.units)} unités</span></div>
+        <div class="row"><span class="k">Volume</span><span><b>${r.lots === null ? '—' : vol(r.lots)}</b> lots</span></div>
+        ${quoteWarning()}`
+      : '<p class="muted">Renseigner Capital et Risque % (entre 0,1 et 100).</p>'}
+      </div>`);
+
+    const f = m.fromLots;
+    if (f) {
+      const over = f.riskPctOfCapital !== null && f.riskPctOfCapital > Number($('cRiskPct').value || 0);
+      parts.push(`
+        <div class="card">
+          <h3>Volume saisi : ${vol(f.lots)} lots</h3>
+          <div class="row"><span class="k">Taille</span><span>${vol(f.units)} unités</span></div>
+          <div class="row"><span class="k">Montant risqué</span><span class="bear">${money(f.riskMoney)}</span></div>
+          <div class="row"><span class="k">Gain si objectif touché</span><span class="bull">${money(f.rewardMoney)}</span></div>
+          <div class="row"><span class="k">Part du capital</span><span class="${over ? 'bear' : ''}">${f.riskPctOfCapital === null ? '—' : f.riskPctOfCapital.toFixed(2) + ' %'}</span></div>
+          ${over ? '<p class="sub bear">Ce volume risque plus que le pourcentage fixé.</p>' : ''}
+        </div>`);
+    }
+
+    el.innerHTML = parts.join('');
+  }
+
+  /** Recopie l'entrée, le stop et l'objectif du setup courant dans le calculateur. */
+  function calcFromSetup() {
+    const s = state.result && state.result.setup;
+    if (!s || !s.zone) { toast('Aucun setup en cours à reprendre.', true); return; }
+    $('cEntry').value = s.entry;
+    $('cSl').value = s.sl;
+    $('cTp').value = s.target ? s.target.price : '';
+    savePrefs();
+    renderCalc();
+  }
+
+  function initCalc(p) {
+    // Capital et risque : mêmes valeurs que la barre d'outils, dans les deux sens.
+    $('cCapital').value = $('capital').value;
+    $('cRiskPct').value = $('riskPct').value;
+    if (p.unitsPerLot) $('cUnitsPerLot').value = p.unitsPerLot;
+
+    for (const id of CALC_FIELDS) {
+      $(id).addEventListener('input', () => {
+        if (id === 'cCapital') $('capital').value = $(id).value;
+        if (id === 'cRiskPct') $('riskPct').value = $(id).value;
+        if (id === 'cCapital' || id === 'cRiskPct') renderPanel();
+        savePrefs();
+        renderCalc();
+      });
+    }
+    $('cFromSetup').addEventListener('click', calcFromSetup);
+    renderCalc();
+  }
+
+  // ---------------------------------------------------------------------------
   // Panneau d'analyse
   // ---------------------------------------------------------------------------
   function renderPanel() {
@@ -523,6 +827,7 @@
           <div class="row"><span class="k">Stop loss</span><span class="bear">${fmt(s.sl)}</span></div>
           <div class="row"><span class="k">Objectif</span><span class="bull">${s.target ? fmt(s.target.price) + ' (' + esc(s.target.label) + ')' : '—'}</span></div>
           <div class="row"><span class="k">Risque / rendement</span><span>${s.rr ? '1 : ' + s.rr.toFixed(2) : '—'}</span></div>
+          ${sizeRows(s)}
           <div class="row"><span class="k">Confluences</span><span>${pct} %</span></div>
           <div class="meter"><i style="width:${pct}%"></i></div>
           <ul class="checklist">
@@ -531,6 +836,29 @@
         </div>`);
     } else {
       parts.push(`<div class="card"><h3>Setup</h3><p class="muted">${r.trend ? 'Pas de zone valide (OB/FVG) dans le sens du biais sous le prix actuel.' : 'Structure indéterminée : attendre une cassure (BOS/CHoCH).'}</p></div>`);
+    }
+
+    const prof = r.profile;
+    if (prof && prof.days >= 3) {
+      // Échantillon trop court = statistique sans valeur : on le dit au lieu de
+      // laisser croire à une tendance.
+      const thin = prof.weeks < 20;
+      const pct = (num, den) => (den > 0 ? Math.round((num / den) * 100) + ' %' : '—');
+      const JOURS = { Sun: 'Dim', Mon: 'Lun', Tue: 'Mar', Wed: 'Mer', Thu: 'Jeu', Fri: 'Ven', Sat: 'Sam' };
+      parts.push(`
+        <div class="card">
+          <h3>Profils observés</h3>
+          <div class="row"><span class="k">Échantillon</span><span>${prof.days} jours · ${prof.weeks} semaines complètes</span></div>
+          ${thin ? '<p class="sub bear">Échantillon trop court pour une tendance : ces chiffres décrivent l’historique chargé, ils ne prédisent rien. Charger plus de bougies ou une unité de temps supérieure.</p>' : ''}
+          <p class="sub">Session portant l'extrême du jour</p>
+          <ul class="zone-list">
+            ${prof.session.map((x) => `<li><span>${esc(x.name)}</span><span>haut ${pct(x.high, prof.days)} · bas ${pct(x.low, prof.days)}</span></li>`).join('')}
+          </ul>
+          <p class="sub">Jour portant l'extrême de la semaine</p>
+          <ul class="zone-list">
+            ${prof.weekday.map((x) => `<li><span>${esc(JOURS[x.weekday] || x.weekday)} <span class="tag">${x.days} j</span></span><span>haut ${pct(x.high, prof.weeks)} · bas ${pct(x.low, prof.weeks)} · haussier ${pct(x.up, x.days)}</span></li>`).join('')}
+          </ul>
+        </div>`);
     }
 
     const zones = [
@@ -562,6 +890,107 @@
           ${r.levels.pdh ? `<li><span>PDH / PDL</span><span>${fmt(r.levels.pdh.price)} / ${fmt(r.levels.pdl.price)}</span></li>` : ''}
         </ul>
       </div>`);
+
+    if (r.regime) {
+      const g = r.regime;
+      const cls = g.kind === 'expansion' ? 'bull' : g.kind === 'consolidation' ? 'bear' : '';
+      parts.push(`
+        <div class="card">
+          <h3>Régime du jour</h3>
+          <div class="row"><span class="k">Dernier jour complet</span><span class="${cls}">${g.kind} <span class="tag">${esc(g.key)}</span></span></div>
+          <div class="row"><span class="k">Range / médiane</span><span>${fmt(g.range)} / ${fmt(g.median)} <span class="tag">×${g.ratio.toFixed(2)}</span></span></div>
+          ${g.running ? `<div class="row"><span class="k">Journée en cours</span><span class="muted">×${g.running.ratio.toFixed(2)} — incomplète, non comparable</span></div>` : ''}
+          <p class="sub">${esc(g.advice)}</p>
+        </div>`);
+    }
+
+    if (r.retracement) {
+      const x = r.retracement;
+      parts.push(`
+        <div class="card">
+          <h3>Retracement en cours</h3>
+          <div class="row"><span class="k">Type</span><span class="${x.strong ? 'bear' : 'bull'}"><b>${x.kind}</b> <span class="tag">${x.score}/3</span></span></div>
+          <div class="row"><span class="k">Plus gros corps</span><span>${x.bodyAtr.toFixed(2)} ATR</span></div>
+          <div class="row"><span class="k">FVG laissés</span><span>${x.fvgCount}</span></div>
+          <div class="row"><span class="k">Suite de même sens</span><span>${x.longestRun} bougies</span></div>
+          <p class="sub">${esc(x.verdict)}</p>
+        </div>`);
+    }
+
+    if (r.quarter) {
+      const q = r.quarter;
+      const hhmm = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}h${String(m % 60).padStart(2, '0')}`;
+      const o = r.trueOpens || {};
+      parts.push(`
+        <div class="card">
+          <h3>Quarterly Theory</h3>
+          <div class="row"><span class="k">Quart</span><span>${esc(q.name)} <span class="tag">${hhmm(q.start)} – ${hhmm(q.end)}</span></span></div>
+          <div class="row"><span class="k">Phase attendue</span><span>${esc(q.phase)}</span></div>
+          <div class="row"><span class="k">Bloc 90 min</span><span>${q.sub} / 4 <span class="tag">${hhmm(q.subStart)} – ${hhmm(q.subEnd)}</span></span></div>
+          <div class="row"><span class="k">True Session Open</span><span>${hhmm(q.trueSessionOpen)}</span></div>
+          <div class="row"><span class="k">True Open du jour</span><span>${o.tdo ? fmt(o.tdo.price) : '—'}</span></div>
+          <div class="row"><span class="k">True Open de la semaine</span><span>${o.wto ? fmt(o.wto.price) : '<span class="muted">hors historique</span>'}</span></div>
+          <p class="sub">Séquence attendue AMDX : accumulation, manipulation, distribution, puis continuation ou retournement. La variante XAMD relève du jugement et n'est pas détectée.</p>
+        </div>`);
+    }
+
+    if (r.unicorns && r.unicorns.length) {
+      parts.push(`
+        <div class="card">
+          <h3>Unicorn</h3>
+          <ul class="zone-list">
+            ${[...r.unicorns].reverse().map((u) => {
+              const rr = Math.abs(u.entry - u.sl);
+              return `
+              <li>
+                <span><span class="tag">${u.dir === 1 ? 'achat' : 'vente'}</span>
+                  <span class="${u.dir === 1 ? 'bull' : 'bear'}">${fmt(u.bottom)} – ${fmt(u.top)}</span>
+                  <span class="sub">${esc(u.mssType)} · balayage ${esc(u.sweepType)}</span></span>
+                <span>entrée ${fmt(u.entry)}${u.entryClamped ? ' <span class="tag">ramenée</span>' : ''}
+                  <span class="bear">stop ${fmt(u.sl)}</span>
+                  <span class="sub">risque ${fmt(rr)}</span></span>
+              </li>`;
+            }).join('')}
+          </ul>
+          <p class="sub">Breaker chevauchant un FVG, après balayage de liquidité et cassure de structure. Entrée au CE du FVG, stop au-delà de l'extrême balayé.</p>
+        </div>`);
+    }
+
+    if (r.judas && r.judas.length) {
+      const JUDAS_STATUS = { confirmed: 'confirmé', displaced: 'déplacement confirmé' };
+      parts.push(`
+        <div class="card">
+          <h3>Judas Swing</h3>
+          <ul class="zone-list">
+            ${[...r.judas].reverse().map((j) => `
+              <li>
+                <span><span class="tag">${esc(j.sessionName)}</span>
+                  <span class="${j.dir === 1 ? 'bull' : 'bear'}">${j.dir === 1 ? 'haussier' : 'baissier'}</span>
+                  <span class="sub">range ${fmt(j.rangeLow)} – ${fmt(j.rangeHigh)}</span></span>
+                <span>${fmt(j.sweepLevel)} <span class="tag">${JUDAS_STATUS[j.status]}</span>
+                  <span class="sub">il y a ${c.length - 1 - j.sweepIndex} b.</span></span>
+              </li>`).join('')}
+          </ul>
+          <p class="sub">Liquidité prise hors de la range d'ouverture, puis clôture de retour dedans. Le sens affiché est celui du vrai mouvement attendu, à l'opposé du balayage.</p>
+        </div>`);
+    }
+
+    const gapList = r.gaps ? [...r.gaps.nwog, ...r.gaps.ndog].sort((a, b) => b.index - a.index) : [];
+    if (gapList.length) {
+      const GAP_STATUS = { intact: 'intact', ce: 'milieu atteint', filled: 'comblé' };
+      parts.push(`
+        <div class="card">
+          <h3>Écarts d'ouverture</h3>
+          <ul class="zone-list">
+            ${gapList.slice(0, 8).map((gp) => `
+              <li>
+                <span><span class="tag">${gp.kind.toUpperCase()}</span> ${fmt(gp.bottom)} – ${fmt(gp.top)}</span>
+                <span>milieu ${fmt(gp.mid)} <span class="tag">${GAP_STATUS[gp.status]}</span></span>
+              </li>`).join('')}
+          </ul>
+          <p class="sub">Le milieu (consequent encroachment) est le niveau suivi par la méthode, pas les bords.</p>
+        </div>`);
+    }
 
     parts.push(`
       <div class="card">
@@ -646,6 +1075,14 @@
       state.stream = conn;
       toast(`Temps réel actif sur ${state.label}`);
     } catch (e) {
+      // Le flux Deriv ne passe pas par le relais : un WebSocket ne se proxyfie
+      // pas avec une simple requête. Mais si le relais sert les bougies, on peut
+      // rafraîchir régulièrement — moins fin qu'un tick, suffisant pour suivre.
+      if (Data.relayAvailable()) {
+        state.timer = setInterval(run, 30000);
+        toast(`Flux direct indisponible (${e.message}). Rafraîchissement par le serveur toutes les 30 s.`, true);
+        return;
+      }
       state.streamKey = '';
       $('auto').checked = false;
       toast(`Temps réel indisponible : ${e.message}`, true);
@@ -684,8 +1121,24 @@
     if (p.appId) $('appId').value = p.appId;
     if (p.tf) $('tf').value = p.tf;
     if (p.swingLen) $('swingLen').value = p.swingLen;
+    if (p.capital) $('capital').value = p.capital;
+    if (p.riskPct) $('riskPct').value = p.riskPct;
     const boxes = document.querySelectorAll('[data-layer]');
-    if (Array.isArray(p.layers)) boxes.forEach((b) => { b.checked = p.layers.includes(b.dataset.layer); });
+    // Un calque que les préférences enregistrées ne connaissaient pas garde
+    // l'état coché du HTML : sans ça, chaque nouveau calque arriverait décoché
+    // pour les utilisateurs existants. `known` liste les calques connus lors de
+    // la sauvegarde ; les préférences antérieures à ce champ portent sur le jeu
+    // de calques ci-dessous.
+    const PRE_KNOWN_LAYERS = [
+      'structure', 'swings', 'ob', 'breaker', 'fvg',
+      'liquidity', 'pd', 'killzones', 'levels', 'history',
+    ];
+    if (Array.isArray(p.layers)) {
+      const known = Array.isArray(p.known) ? p.known : PRE_KNOWN_LAYERS;
+      boxes.forEach((b) => {
+        if (known.includes(b.dataset.layer)) b.checked = p.layers.includes(b.dataset.layer);
+      });
+    }
     boxes.forEach((b) => {
       if (b.checked) state.layers.add(b.dataset.layer);
       b.addEventListener('change', () => {
@@ -698,6 +1151,14 @@
     $('source').addEventListener('change', () => { updateSourceFields(); savePrefs(); if ($('source').value !== 'csv' || state.csvRaw) run(); });
     $('tf').addEventListener('change', () => { savePrefs(); run(); });
     $('swingLen').addEventListener('change', () => { savePrefs(); run(); });
+    for (const id of ['capital', 'riskPct']) {
+      $(id).addEventListener('input', () => {
+        $(id === 'capital' ? 'cCapital' : 'cRiskPct').value = $(id).value;
+        savePrefs();
+        renderPanel();
+        renderCalc();
+      });
+    }
     const symbolChanged = () => {
       const src = $('source').value;
       $('symbol').value = normalizeSymbol($('symbol').value, src);
@@ -728,10 +1189,14 @@
 
     document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));
-      $('tab-analysis').hidden = t.dataset.tab !== 'analysis';
-      $('tab-guide').hidden = t.dataset.tab !== 'guide';
+      for (const name of ['analysis', 'calc', 'guide']) {
+        $('tab-' + name).hidden = t.dataset.tab !== name;
+      }
     }));
 
+    initCalc(p);
+    refreshServerAlerts();
+    setInterval(refreshServerAlerts, SERVER_ALERTS_MS);
     updateSourceFields();
     loadDerivSymbolList();
     run();

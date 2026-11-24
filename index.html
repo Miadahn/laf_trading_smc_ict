@@ -61,6 +61,16 @@
         <input id="swingLen" type="number" min="2" max="20" value="5">
       </label>
 
+      <label class="field" title="Capital du compte en USD. Sert uniquement au calcul de la taille de position.">
+        <span>Capital USD</span>
+        <input id="capital" type="number" min="0" step="any" value="1000">
+      </label>
+
+      <label class="field" title="Part du capital risquée si le stop loss est touché.">
+        <span>Risque %</span>
+        <input id="riskPct" type="number" min="0.1" max="100" step="0.1" value="1">
+      </label>
+
       <button id="refresh" class="btn primary">Analyser</button>
       <label class="check"><input type="checkbox" id="auto"> <span id="autoLabel">Temps réel</span></label>
     </div>
@@ -72,10 +82,17 @@
     <label class="chip"><input type="checkbox" data-layer="ob" checked> Order Blocks</label>
     <label class="chip"><input type="checkbox" data-layer="breaker" checked> Breakers</label>
     <label class="chip"><input type="checkbox" data-layer="fvg" checked> FVG</label>
+    <label class="chip" title="IFVG : FVG traversé en clôture, qui devient une zone de sens inverse."><input type="checkbox" data-layer="ifvg" checked> IFVG</label>
+    <label class="chip" title="Unicorn : breaker block chevauchant un FVG, après balayage et cassure de structure."><input type="checkbox" data-layer="unicorn" checked> Unicorn</label>
     <label class="chip"><input type="checkbox" data-layer="liquidity" checked> Liquidité</label>
     <label class="chip"><input type="checkbox" data-layer="pd" checked> Premium/Discount</label>
     <label class="chip"><input type="checkbox" data-layer="killzones" checked> Killzones</label>
     <label class="chip"><input type="checkbox" data-layer="levels" checked> PDH/PDL</label>
+    <label class="chip" title="Écarts d'ouverture : NWOG (semaine) et NDOG (jour)."><input type="checkbox" data-layer="gaps" checked> NWOG/NDOG</label>
+    <label class="chip" title="Quarterly Theory : quarts de journée Q1-Q4, blocs de 90 min, True Opens."><input type="checkbox" data-layer="quarters"> Quarts (QT)</label>
+    <label class="chip" title="Judas Swing : faux mouvement d'ouverture de session, range de référence balayée puis refermée."><input type="checkbox" data-layer="judas" checked> Judas Swing</label>
+    <label class="chip" title="CISD : clôture au-delà de l'ouverture de la jambe de livraison opposée."><input type="checkbox" data-layer="cisd" checked> CISD</label>
+    <label class="chip" title="Turtle soup / CRT : mèche hors de la bougie précédente, clôture revenue dedans."><input type="checkbox" data-layer="turtle"> Turtle soup</label>
     <label class="chip"><input type="checkbox" data-layer="history"> Zones passées</label>
   </nav>
 
@@ -89,11 +106,55 @@
     <aside class="panel">
       <div class="tabs" role="tablist">
         <button class="tab active" data-tab="analysis" role="tab">Analyse</button>
+        <button class="tab" data-tab="calc" role="tab">Calculateur</button>
         <button class="tab" data-tab="guide" role="tab">Guide SMC / ICT</button>
       </div>
 
       <div id="tab-analysis" class="tab-body">
         <div id="analysis"></div>
+        <div id="serverAlerts"></div>
+      </div>
+
+      <div id="tab-calc" class="tab-body" hidden>
+        <div class="card">
+          <h3>Niveaux</h3>
+          <div class="calc-grid">
+            <label class="field"><span>Entrée</span>
+              <input id="cEntry" type="number" step="any" inputmode="decimal"></label>
+            <label class="field"><span>Stop loss</span>
+              <input id="cSl" type="number" step="any" inputmode="decimal"></label>
+            <label class="field"><span>Objectif (TP)</span>
+              <input id="cTp" type="number" step="any" inputmode="decimal"></label>
+          </div>
+          <button id="cFromSetup" class="btn" type="button">Reprendre le setup en cours</button>
+          <p class="sub">Le sens du trade est déduit de la position du stop : sous l'entrée = achat, au-dessus = vente.</p>
+        </div>
+
+        <div class="card">
+          <h3>Compte et contrat</h3>
+          <div class="calc-grid">
+            <label class="field"><span>Capital USD</span>
+              <input id="cCapital" type="number" min="0" step="any" inputmode="decimal"></label>
+            <label class="field"><span>Risque %</span>
+              <input id="cRiskPct" type="number" min="0.1" max="100" step="0.1" inputmode="decimal"></label>
+            <label class="field" title="Taille d'un lot chez ton broker : 100 000 pour un lot Forex standard, 100 pour l'or, 1 pour la plupart des indices et crypto.">
+              <span>Unités par lot</span>
+              <input id="cUnitsPerLot" type="number" min="0" step="any" list="lot-sizes" value="100000" inputmode="decimal">
+              <datalist id="lot-sizes">
+                <option value="100000" label="Forex standard"><option value="10000" label="Forex mini">
+                <option value="1000" label="Forex micro"><option value="100" label="Or / XAU">
+                <option value="1" label="Indice / crypto (1 unité)">
+              </datalist>
+            </label>
+            <label class="field" title="Laisser vide pour obtenir le volume conseillé. Renseigner pour connaître le risque réel de ce volume.">
+              <span>Volume (lots)</span>
+              <input id="cLots" type="number" min="0" step="any" placeholder="auto" inputmode="decimal"></label>
+          </div>
+          <p class="sub">Capital et Risque % sont partagés avec la barre d'outils. Les montants sont en USD ; si l'actif n'est pas coté en USD, le calculateur le signale.</p>
+        </div>
+
+        <div id="calcOut"></div>
+        <p class="disclaimer">Calcul d'aide à la décision. Aucun ordre n'est transmis : l'exécution se fait à la main chez ton broker.</p>
       </div>
 
       <div id="tab-guide" class="tab-body" hidden>

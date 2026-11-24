@@ -1,0 +1,5 @@
+# Base des alertes du serveur : propre à chaque machine
+server/data/
+
+# Variables d'environnement (ALERT_WEBHOOK, ALERT_CHAT_ID, DERIV_APP_ID)
+.env

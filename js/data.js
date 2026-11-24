@@ -40,7 +40,14 @@
   // app_id 1089 = application de test publique de Deriv. Pour un usage régulier,
   // enregistrer sa propre application sur api.deriv.com et saisir son app_id.
   const DERIV_DEFAULT_APP_ID = '1089';
-  const DERIV_HOSTS = ['wss://ws.derivws.com/websockets/v3', 'wss://ws.binaryws.com/websockets/v3'];
+  // Essayés dans l'ordre. `api.derivws.com` est l'entrée actuelle ; les deux
+  // autres sont les entrées historiques, derrière Cloudflare, qui renvoient un
+  // HTTP 520 depuis beaucoup de réseaux (VPS, hébergeurs, certains FAI).
+  const DERIV_HOSTS = [
+    'wss://api.derivws.com/websockets/v3',
+    'wss://ws.derivws.com/websockets/v3',
+    'wss://ws.binaryws.com/websockets/v3',
+  ];
   // Granularités acceptées par Deriv (secondes). Le 1W est reconstruit depuis le 1D.
   const DERIV_GRANULARITY = { '1m': 60, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '1d': 86400, '1w': 86400 };
 
@@ -54,6 +61,26 @@
     ['OTC_NDX', 'US Tech 100'], ['OTC_SPC', 'US 500'], ['OTC_DJI', 'Wall Street 30'], ['OTC_GDAXI', 'Germany 40'],
     ['cryBTCUSD', 'BTC/USD'], ['cryETHUSD', 'ETH/USD'],
   ];
+
+  /**
+   * Devise de cotation déduite du symbole, ou `null` si le symbole ne la dit pas
+   * (indices boursiers, actifs inconnus). Les synthétiques Deriv sont en USD.
+   * Sert uniquement à prévenir quand les montants ne sont pas réellement en USD.
+   */
+  function quoteCurrency(symbol, source) {
+    const sym = String(symbol || '').trim();
+    if (!sym) return null;
+    if (source === 'binance' || /USDT?$/.test(sym) && !/^(frx|cry)/.test(sym)) {
+      const m = /^[A-Z0-9]{2,}?(USDT|USDC|FDUSD|TUSD|USD|BTC|ETH|BNB|EUR|TRY|BRL)$/.exec(sym.toUpperCase());
+      if (!m) return null;
+      return /^USD|USD$/.test(m[1]) ? 'USD' : m[1];
+    }
+    // Deriv : frxEURUSD, frxUSDJPY, frxXAUUSD, cryBTCUSD -> les 3 derniers caractères
+    const fx = /^(?:frx|cry)[A-Z]{3}([A-Z]{3})$/.exec(sym);
+    if (fx) return fx[1];
+    if (/^OTC_|^WLD/.test(sym)) return null;      // indices : cotation variable
+    return 'USD';                                  // synthétiques Deriv et démo
+  }
 
   /** Les indices synthétiques tournent 24h/24 : les killzones ICT n'y ont pas de sens. */
   function isDerivSynthetic(symbol) {
@@ -73,30 +100,70 @@
     }
 
     async open() {
+      // Chaque hôte essayé est tracé : sans ça, « Deriv injoignable » ne dit pas
+      // si l'un d'eux a répondu autre chose que les autres.
+      this.attempts = [];
       let lastErr;
       for (const host of DERIV_HOSTS) {
         try {
           await this._connect(`${host}?app_id=${encodeURIComponent(this.appId)}&l=FR`);
+          this.host = host;
           return this;
-        } catch (e) { lastErr = e; }
+        } catch (e) {
+          this.attempts.push(`${host.replace('wss://', '').split('/')[0]} : ${e.message}`);
+          lastErr = e;
+        }
       }
-      throw lastErr || new Error('Deriv injoignable');
+      const detail = this.attempts.join(' · ');
+      throw new Error(
+        `Deriv injoignable (app_id ${this.appId}). ${detail}. `
+        + 'Vérifier la console du navigateur, onglet Réseau, pour le code HTTP du refus.',
+      );
     }
 
     _connect(url) {
       return new Promise((resolve, reject) => {
-        const ws = new WebSocket(url);
-        const timer = setTimeout(() => { ws.close(); reject(new Error('Deriv : délai de connexion dépassé')); }, 10000);
+        let ws;
+        try {
+          ws = new WebSocket(url);
+        } catch (e) {
+          reject(new Error(`URL refusée (${e.message})`));
+          return;
+        }
+        let settled = false;
+        const fail = (msg) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(new Error(msg));
+        };
+        const timer = setTimeout(() => {
+          try { ws.close(); } catch (e) { /* déjà fermé */ }
+          fail('délai de 10 s dépassé');
+        }, 10000);
         ws.onopen = () => {
+          settled = true;
           clearTimeout(timer);
           this.ws = ws;
           // Deriv coupe les connexions inactives : ping régulier
           this.ping = setInterval(() => this.send({ ping: 1 }).catch(() => {}), 30000);
           resolve();
         };
-        ws.onerror = () => { clearTimeout(timer); reject(new Error('Deriv injoignable')); };
-        ws.onclose = () => {
+        // Le navigateur ne donne aucun détail sur `error` : c'est `close` qui
+        // porte le code, et c'est lui qui distingue un refus d'upgrade (1006)
+        // d'une fermeture pour cause de politique (1008) ou de surcharge (1013).
+        ws.onerror = () => fail('connexion refusée');
+        ws.onclose = (ev) => {
           clearInterval(this.ping);
+          if (!settled) {
+            const code = ev && ev.code ? ev.code : 0;
+            const why = code === 1006 ? 'upgrade WebSocket refusé (réseau, proxy ou Cloudflare)'
+              : code === 1008 ? 'refusée par Deriv (app_id ou origine non autorisés)'
+                : code === 1013 ? 'Deriv surchargé, réessayer plus tard'
+                  : `fermée avec le code ${code || 'inconnu'}`;
+            fail(why);
+            return;
+          }
           for (const p of this.pending.values()) p.reject(new Error('Connexion Deriv fermée'));
           this.pending.clear();
           if (this.ws === ws && this.onClose) this.onClose();
@@ -195,7 +262,47 @@
     return true;
   }
 
+  /**
+   * Relais servi par `server/server.js`. Utilisable seulement si la page est
+   * servie en http(s) : ouverte en `file://`, il n'y a pas de serveur derrière.
+   * Hors navigateur (le serveur lui-même), il n'y a rien à relayer non plus.
+   */
+  function relayAvailable() {
+    return typeof location !== 'undefined' && /^https?:$/.test(location.protocol);
+  }
+
+  async function fetchDerivViaRelay(symbol, interval, count) {
+    const url = `api/deriv/candles?symbol=${encodeURIComponent(symbol)}`
+      + `&tf=${encodeURIComponent(interval)}&count=${encodeURIComponent(count)}`;
+    const res = await fetch(url, { cache: 'no-store' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `relais : HTTP ${res.status}`);
+    if (!Array.isArray(body.candles) || !body.candles.length) {
+      throw new Error('relais : aucune bougie renvoyée');
+    }
+    return { candles: body.candles, htf: body.htf || null, viaRelay: true };
+  }
+
+  /**
+   * Bougies Deriv, en direct depuis le navigateur. Si le WebSocket n'aboutit
+   * pas — réseau, proxy, extension, Cloudflare — on repasse par le serveur
+   * local, qui atteint Deriv depuis là où il tourne. Les deux chemins
+   * aboutissent au même format de bougies.
+   */
   async function fetchDeriv(symbol, interval, count, appId, htfInterval) {
+    try {
+      return await fetchDerivDirect(symbol, interval, count, appId, htfInterval);
+    } catch (err) {
+      if (!relayAvailable()) throw err;
+      try {
+        return await fetchDerivViaRelay(symbol, interval, count);
+      } catch (relayErr) {
+        throw new Error(`${err.message} — relais serveur : ${relayErr.message}`);
+      }
+    }
+  }
+
+  async function fetchDerivDirect(symbol, interval, count, appId, htfInterval) {
     const conn = await new DerivConnection(appId).open();
     try {
       const main = await conn.send(derivCandlesRequest(symbol, interval, count, false));
@@ -366,7 +473,8 @@
 
   const Data = {
     TF_SECONDS, HTF, fetchBinance, parseCSV, parseTime, normalize, detectTimeframe, demoCandles,
-    DERIV_DEFAULT_APP_ID, DERIV_SYMBOLS, isDerivSynthetic, fetchDeriv, streamDeriv, listDerivSymbols,
+    DERIV_DEFAULT_APP_ID, DERIV_SYMBOLS, isDerivSynthetic, quoteCurrency,
+    fetchDeriv, fetchDerivDirect, fetchDerivViaRelay, relayAvailable, streamDeriv, listDerivSymbols,
     parseDerivCandles, applyDerivOhlc, derivCandlesRequest,
   };
   root.SMCData = Data;

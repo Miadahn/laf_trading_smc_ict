@@ -1,0 +1,12 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "pollSeconds": 60,
+  "swingLength": 5,
+  "watch": [
+    { "source": "deriv", "symbol": "R_75", "tf": "15m" },
+    { "source": "deriv", "symbol": "BOOM1000", "tf": "15m" },
+    { "source": "deriv", "symbol": "frxEURUSD", "tf": "15m" },
+    { "source": "binance", "symbol": "BTCUSDT", "tf": "15m" }
+  ]
+}
