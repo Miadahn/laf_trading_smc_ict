@@ -40,10 +40,19 @@
   // app_id 1089 = application de test publique de Deriv. Pour un usage régulier,
   // enregistrer sa propre application sur api.deriv.com et saisir son app_id.
   const DERIV_DEFAULT_APP_ID = '1089';
-  // Essayés dans l'ordre. `api.derivws.com` est l'entrée actuelle ; les deux
-  // autres sont les entrées historiques, derrière Cloudflare, qui renvoient un
-  // HTTP 520 depuis beaucoup de réseaux (VPS, hébergeurs, certains FAI).
+  // Essayés dans l'ordre.
+  //
+  // `api-core.deriv.com` est l'entrée qu'utilise aujourd'hui Deriv lui-même
+  // (relevée dans l'onglet Réseau de charts.deriv.com). Elle accepte le même
+  // protocole que l'API historique — mêmes requêtes, même enveloppe de réponse
+  // — et tolère la query `app_id`, inutile mais sans effet.
+  //
+  // Les trois autres sont les entrées historiques. Elles sont derrière
+  // Cloudflare et renvoient un HTTP 520 : refus d'upgrade WebSocket (code 1006)
+  // aussi bien depuis un navigateur que depuis Node. Gardées en repli au cas où
+  // elles reviendraient, mais elles ne répondent plus.
   const DERIV_HOSTS = [
+    'wss://api-core.deriv.com/options/v1/ws/public',
     'wss://api.derivws.com/websockets/v3',
     'wss://ws.derivws.com/websockets/v3',
     'wss://ws.binaryws.com/websockets/v3',
@@ -144,10 +153,12 @@
           clearTimeout(timer);
           reject(new Error(msg));
         };
+        // 6 s par hôte, pas 10 : trois hôtes essayés en série, et un refus
+        // d'upgrade est immédiat. Attendre plus ne fait que retarder le message.
         const timer = setTimeout(() => {
           try { ws.close(); } catch (e) { /* déjà fermé */ }
-          fail('délai de 10 s dépassé');
-        }, 10000);
+          fail('délai de 6 s dépassé');
+        }, 6000);
         ws.onopen = () => {
           settled = true;
           clearTimeout(timer);
@@ -348,9 +359,18 @@
     const conn = await new DerivConnection(appId).open();
     try {
       const res = await conn.send({ active_symbols: 'brief' });
-      return (res.active_symbols || []).map((s) => ({
-        symbol: s.symbol, name: s.display_name, market: s.market_display_name, open: !!s.exchange_is_open,
-      }));
+      // Les deux générations d'API ne nomment pas les champs pareil :
+      //   historique : symbol / display_name / market_display_name
+      //   api-core   : underlying_symbol / underlying_symbol_name / market
+      // On lit les deux, pour que le repli sur un ancien hôte reste lisible.
+      return (res.active_symbols || [])
+        .map((x) => ({
+          symbol: x.underlying_symbol || x.symbol,
+          name: x.underlying_symbol_name || x.display_name || x.underlying_symbol || x.symbol,
+          market: x.market_display_name || x.market,
+          open: !!x.exchange_is_open,
+        }))
+        .filter((x) => x.symbol);
     } finally {
       conn.close();
     }

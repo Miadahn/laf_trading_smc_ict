@@ -29,24 +29,54 @@ Pour une surveillance continue avec alertes navigateur fermé, voir
 | **Fichier CSV** | Pour le Forex, les indices, les actions… Export TradingView (`time,open,high,low,close,volume`) ou MetaTrader (`date,heure,open,high,low,close,volume`). L'unité de temps est détectée ; on peut choisir une unité supérieure (rééchantillonnage). |
 | **Démo** | Données simulées, utilisées automatiquement si Deriv ou Binance est injoignable. |
 
+### Deriv : les points d'entrée
+
+Les données de marché Deriv ne circulent que par WebSocket — il n'existe aucun endpoint
+REST pour les bougies. Quatre hôtes sont essayés dans l'ordre :
+
+| Hôte | État |
+|---|---|
+| `api-core.deriv.com/options/v1/ws/public` | **celui qui répond**, utilisé par Deriv lui-même |
+| `api.derivws.com/websockets/v3` | ne répond plus |
+| `ws.derivws.com/websockets/v3` | ne répond plus |
+| `ws.binaryws.com/websockets/v3` | ne répond plus |
+
+Les trois entrées historiques sont derrière Cloudflare et renvoient un **HTTP 520**. Le
+WebSocket est refusé à l'upgrade (code de fermeture **1006**), aussi bien depuis un
+navigateur que depuis Node, avec ou sans `app_id`. Elles sont gardées en repli au cas où
+elles reviendraient.
+
+`api-core.deriv.com` accepte le **même protocole** que l'API historique : mêmes requêtes
+`ticks_history`, même enveloppe de réponse (`req_id`, `msg_type`, `candles`, `pip_size`),
+et il tolère la query `app_id`, inutile mais sans effet.
+
+Seul `active_symbols` diffère, et le code lit les deux formes :
+
+| Champ | Historique | api-core |
+|---|---|---|
+| symbole | `symbol` | `underlying_symbol` |
+| nom affiché | `display_name` | `underlying_symbol_name` |
+| marché | `market_display_name` | `market` |
+
 ### Deriv : que faire si ça ne marche pas
 
-Les données de marché Deriv ne circulent que par WebSocket. S'il n'aboutit pas, le message
-d'erreur de l'application nomme désormais chaque hôte essayé et la raison du refus :
+Le message d'erreur nomme chaque hôte essayé et traduit le code de fermeture :
 
-| Code de fermeture | Signification | Piste |
+| Code | Signification | Piste |
 |---|---|---|
-| `1006` | upgrade WebSocket refusé | réseau, proxy ou Cloudflare — essayer un autre réseau |
-| `1008` | refusé par Deriv | `app_id` ou origine non autorisés — créer son app_id |
+| `1006` | upgrade WebSocket refusé | hôte mort, réseau ou proxy |
+| `1008` | refusé par Deriv | `app_id` ou origine non autorisés |
 | `1013` | Deriv surchargé | réessayer plus tard |
 
-Test décisif : ouvrir **[charts.deriv.com](https://charts.deriv.com)**, la page de
-graphiques de Deriv, qui utilise le même WebSocket. Si elle affiche des cours, le problème
-vient de l'application ; si elle reste vide, il vient du réseau.
+Pour savoir si le problème vient du réseau ou de l'application, ouvrir
+**[charts.deriv.com](https://charts.deriv.com)** : c'est la page de graphiques de Deriv.
+Si elle affiche des cours, le réseau est bon. Son onglet Réseau, filtre **WS**, révèle
+l'adresse que Deriv utilise réellement — c'est ainsi que `api-core.deriv.com` a été
+trouvé, le jour où les entrées historiques ont cessé de répondre.
 
-En dernier recours, les indices synthétiques (`R_75`, `BOOM1000`, `stpRNG`…) n'existent
-que chez Deriv : aucune autre source ne les propose. Pour le Forex, l'or, les indices et
-la crypto, **Binance** et l'**import CSV** restent disponibles.
+Les indices synthétiques (`R_75`, `BOOM1000`, `stpRNG`…) n'existent que chez Deriv :
+aucune autre source ne les propose. Pour le Forex, l'or, les indices et la crypto,
+**Binance** et l'**import CSV** restent disponibles.
 
 ### Deriv : App ID
 
