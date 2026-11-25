@@ -294,6 +294,13 @@ par HTTP, une surveillance continue de plusieurs actifs, et des alertes qui part
 node server/server.js        # puis ouvrir http://127.0.0.1:8787
 ```
 
+Sous Windows, **double-cliquer `demarrer.bat`** fait la même chose : il se place dans le
+bon dossier, vérifie que Node est présent, démarre le serveur et ouvre le navigateur.
+
+Le serveur **vit dans sa fenêtre** : la fermer l'arrête, et la page ne répond plus. La
+laisser ouverte, réduite si besoin. Après une mise à jour du code, il faut le redémarrer
+pour qu'elle soit prise en compte.
+
 Zéro dépendance à installer : `node:sqlite`, `WebSocket` et `fetch` sont dans la
 bibliothèque standard de **Node 22+**.
 
